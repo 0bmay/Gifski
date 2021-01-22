@@ -41,7 +41,7 @@ extension NSView {
 
 
 /// This is useful as `awakeFromNib` is not called for programatically created views.
-class SSView: NSView {
+class SSView: NSView { // swiftlint:disable:this final_class
 	var didAppearWasCalled = false
 
 	/// Meant to be overridden in subclasses
@@ -342,8 +342,12 @@ extension AVAssetImageGenerator {
 		var completedCount = 0
 		var decodeFailureFrameCount = 0
 
-		generateCGImagesAsynchronously(forTimes: times) { requestedTime, image, actualTime, result, error in
-			if (Double(decodeFailureFrameCount) / Double(totalCount)) > 0.5 {
+		generateCGImagesAsynchronously(forTimes: times) { [weak self] requestedTime, image, actualTime, result, error in
+			guard let self = self else {
+				return
+			}
+
+			if (Double(decodeFailureFrameCount) / Double(totalCount)) > 0.8 {
 				completionHandler(.failure(NSError.appError("\(decodeFailureFrameCount) of \(totalCount) frames failed to decode. This is a bug in macOS. We are looking into workarounds.")))
 				return
 			}
@@ -374,11 +378,30 @@ extension AVAssetImageGenerator {
 						break
 					}
 
-					// macOS 11 started throwing “decode failed” error for some frames in screen recordings. As a workaround, we ignore these. We throw an error if more than 50% of the frames could not be decoded.
+					// macOS 11 (still an issue in macOS 11.1) started throwing “decode failed” error for some frames in screen recordings. As a workaround, we ignore these. We throw an error if more than 50% of the frames could not be decoded.
 					if error.code == .decodeFailed {
-						decodeFailureFrameCount += 1
-						totalCount -= 1
-						Crashlytics.recordNonFatalError(error: error, userInfo: ["requestedTime": requestedTime.seconds])
+						var newActualTime = CMTime.zero
+						if let image = try? self.copyCGImage(at: requestedTime, actualTime: &newActualTime) {
+							completedCount += 1
+
+							completionHandler(
+								.success(
+									CompletionHandlerResult(
+										image: image,
+										requestedTime: requestedTime,
+										actualTime: newActualTime,
+										completedCount: completedCount,
+										totalCount: totalCount,
+										isFinished: completedCount == totalCount
+									)
+								)
+							)
+						} else {
+							decodeFailureFrameCount += 1
+							totalCount -= 1
+							Crashlytics.recordNonFatalError(error: error, userInfo: ["requestedTime": requestedTime.seconds])
+						}
+
 						break
 					}
 				}
@@ -719,6 +742,7 @@ enum AVFormat: String {
 	case hevc
 	case h264
 	case av1
+	case vp9
 	case appleProResRAWHQ
 	case appleProResRAW
 	case appleProRes4444XQ
@@ -751,6 +775,8 @@ enum AVFormat: String {
 			self = .h264
 		case "av01":
 			self = .av1
+		case "vp09":
+			self = .vp9
 		case "aprh": // From https://avpres.net/Glossar/ProResRAW.html
 			self = .appleProResRAWHQ
 		case "aprn":
@@ -802,6 +828,8 @@ enum AVFormat: String {
 			return "avc1"
 		case .av1:
 			return "av01"
+		case .vp9:
+			return "vp09"
 		case .appleProResRAWHQ:
 			return "aprh"
 		case .appleProResRAW:
@@ -867,6 +895,8 @@ extension AVFormat: CustomStringConvertible {
 			return "H264"
 		case .av1:
 			return "AV1"
+		case .vp9:
+			return "VP9"
 		case .appleProResRAWHQ:
 			return "Apple ProRes RAW HQ"
 		case .appleProResRAW:
@@ -1244,7 +1274,7 @@ extension NSFont {
 let foo = Label(text: "Foo")
 ```
 */
-class Label: NSTextField {
+class Label: NSTextField { // swiftlint:disable:this final_class
 	var text: String {
 		get { stringValue }
 		set {
@@ -1314,7 +1344,6 @@ foo()
 //=> "foo() in main.swift:1 has not been implemented"
 ```
 */
-// swiftlint:disable:next unavailable_function
 func unimplemented(
 	function: StaticString = #function,
 	file: String = #fileID,
@@ -1620,6 +1649,11 @@ extension String {
 }
 
 
+extension NSAppearance {
+	var isDarkMode: Bool { bestMatch(from: [.darkAqua, .aqua]) == .darkAqua }
+}
+
+
 enum SSApp {
 	static let id = Bundle.main.bundleIdentifier!
 	static let name = Bundle.main.object(forInfoDictionaryKey: kCFBundleNameKey as String) as! String
@@ -1637,6 +1671,8 @@ enum SSApp {
 			return true
 		}
 	}()
+
+	static var isDarkMode: Bool { NSApp.effectiveAppearance.isDarkMode }
 
 	static func openSendFeedbackPage() {
 		let metadata =
@@ -1876,6 +1912,14 @@ extension URL {
 		ByteCountFormatter.string(fromByteCount: Int64(fileSize), countStyle: .file)
 	}
 
+	// TODO: Use the below instead when targeting macOS 10.15. Also in `AVAsset#fileSize`.
+	/// File size in bytes.
+//	var fileSize: Measurement<UnitInformationStorage> { Measurement<UnitInformationStorage>(value: resourceValue(forKey: .fileSizeKey) ?? 0, unit: .bytes) }
+//
+//	var fileSizeFormatted: String {
+//		ByteCountFormatter.string(from: fileSize, countStyle: .file)
+//	}
+
 	var exists: Bool { FileManager.default.fileExists(atPath: path) }
 
 	var isReadable: Bool { boolResourceValue(forKey: .isReadableKey) }
@@ -1916,6 +1960,8 @@ extension CGSize {
 	}
 
 	var cgRect: CGRect { .init(origin: .zero, size: self) }
+
+	var longestSide: CGFloat { max(width, height) }
 
 	func aspectFit(to boundingSize: CGSize) -> Self {
 		let ratio = min(boundingSize.width / width, boundingSize.height / height)
@@ -3512,7 +3558,7 @@ extension NSFont {
 		Self(descriptor: descriptor, size: 0) ?? self
 	}
 
-	// TODO: When Xcode 12.2 is out, use `[NSFont fontWithSize:]` when available.
+	// TODO: Remove this when targeting macOS 10.15 as it's then built-in.
 	/// Returns a font with the size replaced.
 	/// UIKit polyfill.
 	func withSize(_ size: CGFloat) -> NSFont {

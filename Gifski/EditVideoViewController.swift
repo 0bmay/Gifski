@@ -293,7 +293,25 @@ final class EditVideoViewController: NSViewController {
 				NSAlert.showModal(
 					for: view.window,
 					message: "Animated GIF Limitation",
-					informativeText: "Exporting GIFs with a frame rate higher than 50 is not supported as browsers will throttle and play them at 10 FPS."
+					informativeText: "Exporting GIFs with a frame rate higher than 50 is not supported as browsers will throttle and play them at 10 FPS.",
+					defaultButtonIndex: -1
+				)
+			}
+		}
+	}
+
+	private func showConversionCompletedAnimationWarningIfNeeded() {
+		// TODO: This function eventually will become an OS version check when Apple fixes their GIF animation implementation.
+		// So far `NSImageView` and Quick Look are affected and may be fixed in later OS versions. Depending on how Apple fixes the issue,
+		// the message may need future modifications. Safari works as expected, so it's not all of Apple's software.
+		// https://github.com/feedback-assistant/reports/issues/187
+		SSApp.runOnce(identifier: "gifLoopCountWarning") {
+			DispatchQueue.main.async { [self] in
+				NSAlert.showModal(
+					for: view.window,
+					message: "Animated GIF Preview Limitation",
+					informativeText: "Due to a bug in the macOS GIF handling, the after-conversion preview and Quick Look may not loop as expected. The GIF will loop correctly in web browsers and other image viewing apps.",
+					defaultButtonIndex: -1
 				)
 			}
 		}
@@ -481,7 +499,7 @@ final class EditVideoViewController: NSViewController {
 		let gifski = Gifski()
 		self.gifski = gifski
 
-		setEstimatedFileSize(getNaiveEstimate().attributedString + "   Calculating Accurate Estimate…".attributedString.withColor(.secondaryLabelColor).withFontSize(NSFont.smallSystemFontSize.double))
+		setEstimatedFileSize(getNaiveEstimate().attributedString + "   Calculating Estimate…".attributedString.withColor(.secondaryLabelColor).withFontSize(NSFont.smallSystemFontSize.double))
 
 		gifski.run(conversionSettings, isEstimation: true) { [weak self] result in
 			guard let self = self else {
@@ -539,7 +557,6 @@ final class EditVideoViewController: NSViewController {
 	}
 
 	private func defaultFrameRate(inputFrameRate frameRate: Double) -> Double {
-		let defaultFrameRate = frameRate >= 24 ? frameRate / 2 : frameRate
-		return defaultFrameRate.clamped(to: Constants.allowedFrameRate)
+		frameRate.clamped(to: Constants.allowedFrameRate.lowerBound...20)
 	}
 }
